@@ -41,6 +41,7 @@ details summary{font-weight:600;cursor:pointer}
 <label>Gemini API key (free from aistudio.google.com/apikey)</label><input id="key" type="password" autocomplete="off">
 <label>Google Apps Script web-app URL (for email)</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
 <label>Secret code (same as in Code.gs)</label><input id="sec" type="password" autocomplete="off">
+<label>AI model name (change only if error says model unavailable)</label><input id="model" placeholder="gemini-3.8-flash">
 <label>Project / site name (used in email subject)</label><input id="proj">
 <label>Excel template (.xlsx) — upload once</label><input id="tpl" type="file" accept=".xlsx">
 <small id="tplst"></small>
@@ -73,7 +74,7 @@ details summary{font-weight:600;cursor:pointer}
 const $=s=>document.querySelector(s);
 const cfg=JSON.parse(localStorage.snagCfg||'{}');
 let photos=[];
-const MODEL='gemini-3.8-flash';
+const MODEL=()=>cfg.model||'gemini-3.8-flash';
 
 /* ---------- storage for template ---------- */
 const db=()=>new Promise(r=>{const q=indexedDB.open('snag',1);q.onupgradeneeded=()=>q.result.createObjectStore('k');q.onsuccess=()=>r(q.result)});
@@ -84,11 +85,11 @@ const st=m=>{const e=$('#st');e.style.display=m?'block':'none';e.textContent=m||
 const busy=b=>document.querySelectorAll('button').forEach(x=>x.disabled=b);
 
 /* ---------- settings ---------- */
-['key','url','sec','proj'].forEach(k=>$('#'+k).value=cfg[k]||'');
+['key','url','sec','proj','model'].forEach(k=>$('#'+k).value=cfg[k]||'');
 async function tplStatus(){const t=await idbGet('tplName');$('#tplst').textContent=t?'✅ Template saved: '+t:'⚠️ No template uploaded yet';if(!t||!cfg.key)$('#set').open=true}
 tplStatus();
 $('#save').onclick=async()=>{
-  ['key','url','sec','proj'].forEach(k=>cfg[k]=$('#'+k).value.trim());
+  ['key','url','sec','proj','model'].forEach(k=>cfg[k]=$('#'+k).value.trim());
   localStorage.snagCfg=JSON.stringify(cfg);
   const f=$('#tpl').files[0];
   if(f){await idbSet('tpl',await f.arrayBuffer());await idbSet('tplName',f.name)}
@@ -123,7 +124,7 @@ $('#clr').onclick=()=>{if(confirm('Remove all photos?')){photos=[];render()}};
 const PROMPT='You are a construction site quality inspector writing a snag list. Look at the photo and describe the defect in one or two short sentences: what the defect is, where on the element, and the rectification needed. Plain text only, no preamble.';
 async function describe(p,tries=3){
   const body={contents:[{parts:[{text:PROMPT+(p.area?` Area: ${p.area}.`:'')},{inline_data:{mime_type:'image/jpeg',data:p.url.split(',')[1]}}]}]};
-  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${cfg.key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent?key=${cfg.key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if((r.status===429||r.status===503)&&tries>1){st('AI busy, waiting 15s…');await new Promise(z=>setTimeout(z,15000));return describe(p,tries-1)}
   const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');
   return j.candidates[0].content.parts.map(x=>x.text||'').join('').trim();
