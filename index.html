@@ -57,6 +57,7 @@ details summary{font-weight:600;cursor:pointer}
 <div><label>Floor</label><input id="dFloor"></div>
 <div><label>Elevation</label><input id="dElev"></div>
 <div><label>Area</label><input id="dArea"></div>
+<div><label>Discipline</label><input id="dDisc"></div>
 </div>
 <label class="btn" style="margin-top:10px">📷 Add photos<input id="files" type="file" accept="image/*" multiple hidden></label>
 </div>
@@ -89,6 +90,7 @@ const busy=b=>document.querySelectorAll('button').forEach(x=>x.disabled=b);
 ['groq','gmodel','url','sec','proj','custom'].forEach(k=>$('#'+k).value=cfg[k]||'');
 async function tplStatus(){const t=await idbGet('tplName');$('#tplst').textContent=t?'✅ Template saved: '+t:'⚠️ No template uploaded yet';if(!t||!cfg.groq)$('#set').open=true}
 $('#to').value=cfg.to||'';
+try{const d=JSON.parse(localStorage.snagDef||'{}');$('#dFloor').value=d.f||'';$('#dElev').value=d.e||'';$('#dArea').value=d.a||'';$('#dDisc').value=d.d||''}catch(e){}
 tplStatus();
 $('#save').onclick=async()=>{
   ['groq','gmodel','url','sec','proj','custom'].forEach(k=>cfg[k]=$('#'+k).value.trim());
@@ -105,7 +107,8 @@ $('#files').onchange=async e=>{
   const fs=[...e.target.files];busy(true);
   for(let i=0;i<fs.length;i++){st(`Loading photo ${i+1}/${fs.length}…`);
     const s=await shrink(fs[i]);
-    photos.push({...s,date:$('#dDate').value||iso(fs[i].lastModified),floor:$('#dFloor').value,elev:$('#dElev').value,area:$('#dArea').value,desc:''});}
+    photos.push({...s,date:$('#dDate').value||iso(fs[i].lastModified),floor:$('#dFloor').value,elev:$('#dElev').value,area:$('#dArea').value,disc:$('#dDisc').value,desc:''});}
+  localStorage.snagDef=JSON.stringify({f:$('#dFloor').value,e:$('#dElev').value,a:$('#dArea').value,d:$('#dDisc').value});
   e.target.value='';busy(false);st('');render();
 };
 const SNAGS={
@@ -125,7 +128,8 @@ function render(){
   <div class="g"><div><label>Date</label><input type="date" data-i="${i}" data-k="date" value="${p.date}"></div>
   <div><label>Floor</label><input data-i="${i}" data-k="floor" value="${p.floor}"></div>
   <div><label>Elevation</label><input data-i="${i}" data-k="elev" value="${p.elev}"></div>
-  <div><label>Area</label><input data-i="${i}" data-k="area" value="${p.area}"></div></div>
+  <div><label>Area</label><input data-i="${i}" data-k="area" value="${p.area}"></div>
+  <div><label>Discipline</label><input data-i="${i}" data-k="disc" value="${p.disc||''}"></div></div>
   <label>Quick pick</label><select data-pick="${i}"><option value="">Choose common snag…</option>${snagOpts()}</select>
   <label>Snag description</label><textarea data-i="${i}" data-k="desc">${p.desc}</textarea>
   <button class="x" data-del="${i}">Remove</button></div></div>`).join(''):'<small>No photos yet.</small>';
@@ -169,41 +173,79 @@ async function runAI(){
 $('#ai').onclick=async()=>{busy(true);try{await runAI();st('Descriptions done ✔')}catch(e){st('❌ '+e.message)}busy(false);setTimeout(()=>st(''),4000)};
 
 /* ---------- Excel ---------- */
-const COLS=[['image',/image|photo|pic/],['sno',/s\.?\s*no|sr\.?\s*no|serial|^#$/],['date',/date/],['floor',/floor|level/],['elev',/elevation|elev/],['area',/area|location|room|zone|unit/],['desc',/desc|snag|defect|issue|observation|remark/]];
+const COLS=[['image',/image|photo|pic/],['sno',/s\.?\s*no|sr\.?\s*no|serial|^#$/],['date',/date/],['floor',/floor|level/],['elev',/elevation|elev/],['disc',/discipline|trade|package/],['area',/area|location|room|zone|unit/],['desc',/desc|snag|defect|issue|observation|remark/]];
 let STAGE='';
 const cellTxt=c=>{try{const v=c.value;if(v==null)return '';if(typeof v==='object'){if(v.richText)return v.richText.map(x=>x.text||'').join('');if(v.result!=null)return String(v.result);if(v.text!=null)return String(v.text);return ''}return String(v)}catch(e){return ''}};
-async function build(){STAGE='reading template';
+const clone=o=>JSON.parse(JSON.stringify(o||{}));
+const colNum=L=>L.split('').reduce((a,ch)=>a*26+ch.charCodeAt(0)-64,0);
+const parseRng=s=>{const m=/([A-Z]+)(\d+):([A-Z]+)(\d+)/.exec(s);return m?{c1:colNum(m[1]),r1:+m[2],c2:colNum(m[3]),r2:+m[4]}:null};
+async function build(){
+  STAGE='reading template';
   const buf=await idbGet('tpl');if(!buf)throw new Error('Upload your Excel template in Setup');
   if(!photos.length)throw new Error('Add at least one photo');
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(buf);const ws=wb.worksheets[0];
-  STAGE='finding headings';let best={n:0,row:0,map:{}};
+  STAGE='finding headings';
+  let best={n:0,row:0,map:{}};
   for(let r=1;r<=Math.min(ws.rowCount,40);r++){
     const map={};ws.getRow(r).eachCell((c,ci)=>{const t=cellTxt(c).toLowerCase().trim();
       for(const [k,re] of COLS)if(!map[k]&&re.test(t)){map[k]=ci;break}});
     const n=Object.keys(map).length;if(n>best.n)best={n,row:r,map};
   }
   if(best.n<2||!best.map.image)throw new Error('Could not find header row with an Image/Photo column in the template');
-  STAGE='formatting';const h=best.row,m=best.map,nc=Math.max(ws.columnCount,...Object.values(m));
-  const proto=ws.getRow(h+1),sty={};
-  for(let c=1;c<=nc;c++){const s=JSON.parse(JSON.stringify(proto.getCell(c).style||{}));
-    if(!s.border)s.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
-    s.alignment={...(s.alignment||{}),wrapText:true,vertical:'middle',horizontal:'center'};sty[c]=s}
-  ws.getColumn(m.image).width=31;
-  const dm=d=>d?d.split('-').reverse().join('-'):'';
-  photos.forEach((p,i)=>{
-    STAGE='filling row '+(i+1);
-    const row=ws.getRow(h+1+i);
-    for(let c=1;c<=nc;c++){row.getCell(c).value=null;row.getCell(c).style=JSON.parse(JSON.stringify(sty[c]))}
-    if(m.sno)row.getCell(m.sno).value=i+1;
-    if(m.date)row.getCell(m.date).value=dm(p.date);
-    if(m.floor)row.getCell(m.floor).value=p.floor;
-    if(m.elev)row.getCell(m.elev).value=p.elev;
-    if(m.area)row.getCell(m.area).value=p.area;
-    if(m.desc){row.getCell(m.desc).value=p.desc;row.getCell(m.desc).alignment={...sty[m.desc].alignment,horizontal:'left'}}
-    row.height=118;row.commit&&row.commit();
-    const id=wb.addImage({base64:p.url,extension:'jpeg'}),k=Math.min(205/p.w,150/p.h);
-    ws.addImage(id,{tl:{col:m.image-1+.03,row:h+i+.03},ext:{width:p.w*k,height:p.h*k},editAs:'oneCell'});
-  });
+  const h=best.row,m=best.map,nc=Math.max(ws.columnCount,...Object.values(m)),last=ws.rowCount;
+  STAGE='reading layout';
+  const rowTxt=r=>{let t='';ws.getRow(r).eachCell(c=>{if(c.isMerged&&c.address!==c.master.address)return;t+=' '+cellTxt(c)});return t};
+  const isNum=r=>/^\d+$/.test(cellTxt(ws.getRow(r).getCell(best.map.sno||1)).trim());
+  let fs=last+1;
+  for(let r=last;r>h;r--)if(isNum(r)){fs=r+1;break}
+  const merges=(ws.model.merges||[]).map(parseRng).filter(Boolean);
+  const wide={};merges.forEach(g=>{if(g.r1===g.r2&&g.c2>=nc-1&&g.r1>h)wide[g.r1]=1});
+  let fp=0,dp=0;
+  for(let r=h+1;r<fs;r++)if(wide[r]&&rowTxt(r).trim().length<=40&&!/^\s*\d+\s*$/.test(rowTxt(r))){fp=r;break}
+  for(let r=fs-1;r>h;r--)if(!wide[r]&&isNum(r)){dp=r;break}
+  const mk=(row,fallbackH,extra)=>{const st={};for(let c=1;c<=nc;c++){const s=clone(row&&row.getCell(c).style);
+      if(!s.border)s.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+      s.alignment={vertical:'middle',wrapText:true,horizontal:'center',...(s.alignment||{})};if(extra)Object.assign(s,extra);st[c]=s}
+    return {st,ht:(row&&row.height)||fallbackH}};
+  const D=mk(dp?ws.getRow(dp):null,150);
+  const F=mk(fp?ws.getRow(fp):ws.getRow(h),30,fp?null:{font:{bold:true,size:14}});
+  const foot=[],fmerge=[];
+  for(let r=fs;r<=last;r++){const row=ws.getRow(r),cells=[];
+    for(let c=1;c<=nc;c++){const cell=row.getCell(c);const slave=cell.isMerged&&cell.address!==cell.master.address;
+      cells.push({v:slave?null:cell.value,s:clone(cell.style)})}
+    foot.push({ht:row.height,cells})}
+  merges.forEach(g=>{if(g.r1>=fs)fmerge.push([g.r1-fs,g.c1,g.r2-fs,g.c2])});
+  STAGE='clearing old data';
+  const keep=ws._media.filter(x=>x.range.tl.nativeRow<h),idMap={},nm=[];
+  keep.forEach(x=>{if(!(x.imageId in idMap)){idMap[x.imageId]=nm.length;nm.push(wb.media[x.imageId])}x.imageId=idMap[x.imageId]});
+  ws._media=keep;wb.media=nm;
+  merges.forEach(g=>{if(g.r1>h)ws.unMergeCells(g.r1,g.c1,g.r2,g.c2)});
+  ws._rows.length=Math.min(ws._rows.length,h);
+  STAGE='writing snags';
+  const groups=[],ix={};
+  photos.forEach(p=>{const k=(p.floor||'').trim();if(!(k in ix)){ix[k]=groups.length;groups.push({k,items:[]})}groups[ix[k]].items.push(p)});
+  const colW=ws.getColumn(m.image).width||31,colPx=Math.round(colW*7+5),rowPx=Math.round(D.ht*96/72);
+  let r=h+1,n=1;
+  for(const g of groups){
+    if(g.k){const row=ws.getRow(r);for(let c=1;c<=nc;c++)row.getCell(c).style=clone(F.st[c]);
+      row.getCell(1).value=g.k;ws.mergeCells(r,1,r,nc);row.height=F.ht;r++}
+    for(const p of g.items){
+      STAGE='writing snag '+n;
+      const row=ws.getRow(r);
+      for(let c=1;c<=nc;c++)row.getCell(c).style=clone(D.st[c]);
+      const put=(k,v)=>{if(m[k])row.getCell(m[k]).value=v};
+      put('sno',n);put('elev',p.elev);put('area',p.area);put('disc',p.disc);put('desc',p.desc);
+      if(m.date&&p.date){const [y,mo,d]=p.date.split('-').map(Number);const cell=row.getCell(m.date);cell.value=new Date(Date.UTC(y,mo-1,d));if(!cell.numFmt||cell.numFmt==='General')cell.numFmt='dd-mm-yyyy'}
+      row.height=D.ht;
+      const id=wb.addImage({base64:p.url,extension:'jpeg'}),k=Math.min((colPx-10)/p.w,(rowPx-10)/p.h),iw=p.w*k,ih=p.h*k;
+      ws.addImage(id,{tl:{nativeCol:m.image-1,nativeColOff:Math.round((colPx-iw)/2*9525),nativeRow:r-1,nativeRowOff:Math.round((rowPx-ih)/2*9525)},ext:{width:iw,height:ih},editAs:'oneCell'});
+      r++;n++;
+    }
+  }
+  STAGE='restoring footer';
+  const base=r;
+  foot.forEach((f,i)=>{const row=ws.getRow(base+i);f.cells.forEach((c,j)=>{const cell=row.getCell(j+1);cell.style=clone(c.s);if(c.v!=null)cell.value=c.v});if(f.ht)row.height=f.ht});
+  fmerge.forEach(([a,b,c,d])=>ws.mergeCells(base+a,b,base+c,d));
   STAGE='saving file';return wb.xlsx.writeBuffer();
 }
 const b64=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
