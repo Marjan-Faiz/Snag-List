@@ -51,7 +51,8 @@ details summary{font-weight:600;cursor:pointer}
 </div>
 
 <div class="card">
-<h2>Defaults for new photos</h2>
+<h2>Details for the photos you add next</h2>
+<small>Fill floor / elevation / area, add photos, then change these and add the next set. All sets go into one Excel, grouped by floor.</small>
 <div class="g">
 <div><label>Date (blank = photo's own date)</label><input id="dDate" type="date"></div>
 <div><label>Floor</label><input id="dFloor"></div>
@@ -109,7 +110,7 @@ $('#files').onchange=async e=>{
     const s=await shrink(fs[i]);
     photos.push({...s,date:$('#dDate').value||iso(fs[i].lastModified),floor:$('#dFloor').value,elev:$('#dElev').value,area:$('#dArea').value,disc:$('#dDisc').value,desc:''});}
   localStorage.snagDef=JSON.stringify({f:$('#dFloor').value,e:$('#dElev').value,a:$('#dArea').value,d:$('#dDisc').value});
-  e.target.value='';busy(false);st('');render();
+  e.target.value='';busy(false);render();st(`✔ ${fs.length} photo(s) added to: ${$('#dFloor').value||'-'} / ${$('#dElev').value||'-'}. Change details above for the next set.`);setTimeout(()=>st(''),5000);
 };
 const SNAGS={
 'Wall / Plaster':['Crack in wall plaster - to be repaired and repainted','Plaster surface uneven - to be rectified','Hollow sound in plaster - to be removed and re-plastered','Honeycombing in concrete - to be repaired with polymer mortar','Gap in blockwork joint - to be filled'],
@@ -223,7 +224,8 @@ async function build(){
   ws._rows.length=Math.min(ws._rows.length,h);
   STAGE='writing snags';
   const groups=[],ix={};
-  photos.forEach(p=>{const k=(p.floor||'').trim();if(!(k in ix)){ix[k]=groups.length;groups.push({k,items:[]})}groups[ix[k]].items.push(p)});
+  photos.forEach(p=>{const lab=(p.floor||'').trim(),k=lab.toLowerCase().replace(/\s+/g,' ');if(!(k in ix)){ix[k]=groups.length;groups.push({k:lab,items:[]})}groups[ix[k]].items.push(p)});
+  groups.forEach(g=>g.items.sort((a,b)=>(a.elev||'').localeCompare(b.elev||'',undefined,{numeric:true,sensitivity:'base'})));
   const colW=ws.getColumn(m.image).width||31,colPx=Math.round(colW*7+5),rowPx=Math.round(D.ht*96/72);
   let r=h+1,n=1;
   for(const g of groups){
