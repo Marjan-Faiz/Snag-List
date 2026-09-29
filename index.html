@@ -140,12 +140,12 @@ async function callGroq(p){
 }
 async function describe(p){
   const fns=[];if(cfg.groq)fns.push(callGroq);if(cfg.key)fns.push(callGemini);
-  let err;
+  const errs=new Set();
   for(let t=0;t<3;t++){
-    for(const f of fns){try{return await f(p)}catch(e){err=e}}
+    for(const f of fns){try{return await f(p)}catch(e){errs.add(e.message.slice(0,140))}}
     if(t<2){st('AI busy, retrying…');await new Promise(z=>setTimeout(z,8000))}
   }
-  throw err;
+  throw new Error([...errs].join('  ||  '));
 }
 async function runAI(){
   if(!cfg.groq&&!cfg.key)throw new Error('Add your Groq (or Gemini) API key in Setup');
