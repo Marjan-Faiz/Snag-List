@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snag List Generator</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<meta name="theme-color" content="#0f766e">
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--tx:#1a2330;--mut:#6b7785;--pri:#0f766e;--bd:#d9dfe6}
+@media(prefers-color-scheme:dark){:root{--bg:#10151b;--card:#1a222b;--tx:#e8edf2;--mut:#93a0ad;--bd:#2c3743}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px system-ui,sans-serif;padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(40px,env(safe-area-inset-bottom))}
+main{max-width:720px;margin:auto}
+h1{font-size:1.3rem;margin:4px 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+h2{font-size:1rem;margin:0 0 8px}
+label{display:block;font-size:.8rem;color:var(--mut);margin:6px 0 2px}
+input,textarea{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+textarea{min-height:64px;resize:vertical}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button,.btn{display:block;width:100%;padding:12px;border:0;border-radius:10px;background:var(--pri);color:#fff;font:600 1rem system-ui;margin-top:8px;text-align:center}
+button.s{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+button:disabled{opacity:.5}
+.ph{display:flex;gap:10px;border-top:1px solid var(--bd);padding-top:10px;margin-top:10px}
+.ph img{width:96px;height:96px;object-fit:cover;border-radius:8px;flex:none}
+.ph div{flex:1;min-width:0}
+.x{width:auto;background:#c0392b;padding:6px 10px;margin:0;font-size:.8rem}
+#st{position:sticky;bottom:6px;background:var(--pri);color:#fff;padding:10px;border-radius:10px;display:none;text-align:center}
+small{color:var(--mut)}
+details summary{font-weight:600;cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<h1>📋 Snag List Generator</h1>
+
+<div class="card">
+<details id="set"><summary>⚙️ Setup (one time)</summary>
+<label>Gemini API key (free from aistudio.google.com/apikey)</label><input id="key" type="password" autocomplete="off">
+<label>Google Apps Script web-app URL (for email)</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
+<label>Secret code (same as in Code.gs)</label><input id="sec" type="password" autocomplete="off">
+<label>Project / site name (used in email subject)</label><input id="proj">
+<label>Excel template (.xlsx) — upload once</label><input id="tpl" type="file" accept=".xlsx">
+<small id="tplst"></small>
+<button id="save">Save settings</button>
+</details>
+</div>
+
+<div class="card">
+<h2>Defaults for new photos</h2>
+<div class="g">
+<div><label>Date (blank = photo's own date)</label><input id="dDate" type="date"></div>
+<div><label>Floor</label><input id="dFloor"></div>
+<div><label>Elevation</label><input id="dElev"></div>
+<div><label>Area</label><input id="dArea"></div>
+</div>
+<label class="btn" style="margin-top:10px">📷 Add photos<input id="files" type="file" accept="image/*" multiple hidden></label>
+</div>
+
+<div class="card"><h2>Photos (<span id="n">0</span>)</h2><div id="list"><small>No photos yet.</small></div></div>
+
+<button id="ai" class="s">✨ Write descriptions with AI</button>
+<button id="mail">📧 Generate &amp; email Excel</button>
+<button id="dl" class="s">⬇️ Generate &amp; download only</button>
+<button id="clr" class="s">Clear photos</button>
+<div id="st"></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const cfg=JSON.parse(localStorage.snagCfg||'{}');
+let photos=[];
+const MODEL='gemini-2.5-flash';
+
+/* ---------- storage for template ---------- */
+const db=()=>new Promise(r=>{const q=indexedDB.open('snag',1);q.onupgradeneeded=()=>q.result.createObjectStore('k');q.onsuccess=()=>r(q.result)});
+const idbGet=async k=>{const d=await db();return new Promise(r=>{const q=d.transaction('k').objectStore('k').get(k);q.onsuccess=()=>r(q.result)})};
+const idbSet=async(k,v)=>{const d=await db();return new Promise(r=>{const t=d.transaction('k','readwrite');t.objectStore('k').put(v,k);t.oncomplete=r})};
+
+const st=m=>{const e=$('#st');e.style.display=m?'block':'none';e.textContent=m||''};
+const busy=b=>document.querySelectorAll('button').forEach(x=>x.disabled=b);
+
+/* ---------- settings ---------- */
+['key','url','sec','proj'].forEach(k=>$('#'+k).value=cfg[k]||'');
+async function tplStatus(){const t=await idbGet('tplName');$('#tplst').textContent=t?'✅ Template saved: '+t:'⚠️ No template uploaded yet';if(!t||!cfg.key)$('#set').open=true}
+tplStatus();
+$('#save').onclick=async()=>{
+  ['key','url','sec','proj'].forEach(k=>cfg[k]=$('#'+k).value.trim());
+  localStorage.snagCfg=JSON.stringify(cfg);
+  const f=$('#tpl').files[0];
+  if(f){await idbSet('tpl',await f.arrayBuffer());await idbSet('tplName',f.name)}
+  await tplStatus();st('Saved ✔');setTimeout(()=>st(''),1500);
+};
+
+/* ---------- photos ---------- */
+function shrink(file){return new Promise(res=>{const img=new Image();img.onload=()=>{const k=Math.min(1,1000/Math.max(img.width,img.height)),c=document.createElement('canvas');c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res({url:c.toDataURL('image/jpeg',.72),w:c.width,h:c.height})};img.src=URL.createObjectURL(file)})}
+const iso=t=>{const d=new Date(t);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+$('#files').onchange=async e=>{
+  const fs=[...e.target.files];busy(true);
+  for(let i=0;i<fs.length;i++){st(`Loading photo ${i+1}/${fs.length}…`);
+    const s=await shrink(fs[i]);
+    photos.push({...s,date:$('#dDate').value||iso(fs[i].lastModified),floor:$('#dFloor').value,elev:$('#dElev').value,area:$('#dArea').value,desc:''});}
+  e.target.value='';busy(false);st('');render();
+};
+function render(){
+  $('#n').textContent=photos.length;
+  $('#list').innerHTML=photos.length?photos.map((p,i)=>`<div class="ph"><img src="${p.url}"><div>
+  <div class="g"><div><label>Date</label><input type="date" data-i="${i}" data-k="date" value="${p.date}"></div>
+  <div><label>Floor</label><input data-i="${i}" data-k="floor" value="${p.floor}"></div>
+  <div><label>Elevation</label><input data-i="${i}" data-k="elev" value="${p.elev}"></div>
+  <div><label>Area</label><input data-i="${i}" data-k="area" value="${p.area}"></div></div>
+  <label>Snag description</label><textarea data-i="${i}" data-k="desc">${p.desc}</textarea>
+  <button class="x" data-del="${i}">Remove</button></div></div>`).join(''):'<small>No photos yet.</small>';
+}
+$('#list').addEventListener('input',e=>{const t=e.target;if(t.dataset.k)photos[t.dataset.i][t.dataset.k]=t.value});
+$('#list').addEventListener('click',e=>{if(e.target.dataset.del!==undefined){photos.splice(e.target.dataset.del,1);render()}});
+$('#clr').onclick=()=>{if(confirm('Remove all photos?')){photos=[];render()}};
+
+/* ---------- AI ---------- */
+const PROMPT='You are a construction site quality inspector writing a snag list. Look at the photo and describe the defect in one or two short sentences: what the defect is, where on the element, and the rectification needed. Plain text only, no preamble.';
+async function describe(p,tries=3){
+  const body={contents:[{parts:[{text:PROMPT+(p.area?` Area: ${p.area}.`:'')},{inline_data:{mime_type:'image/jpeg',data:p.url.split(',')[1]}}]}]};
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${cfg.key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if((r.status===429||r.status===503)&&tries>1){st('AI busy, waiting 15s…');await new Promise(z=>setTimeout(z,15000));return describe(p,tries-1)}
+  const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');
+  return j.candidates[0].content.parts.map(x=>x.text||'').join('').trim();
+}
+async function runAI(){
+  if(!cfg.key)throw new Error('Add your Gemini API key in Setup');
+  const todo=photos.filter(p=>!p.desc.trim());
+  for(let i=0;i<todo.length;i++){st(`AI describing ${i+1}/${todo.length}…`);
+    try{todo[i].desc=await describe(todo[i])}catch(e){throw new Error('Photo '+(photos.indexOf(todo[i])+1)+': '+e.message)}
+    render();await new Promise(z=>setTimeout(z,1500));}
+}
+$('#ai').onclick=async()=>{busy(true);try{await runAI();st('Descriptions done ✔')}catch(e){st('❌ '+e.message)}busy(false);setTimeout(()=>st(''),4000)};
+
+/* ---------- Excel ---------- */
+const COLS=[['image',/image|photo|pic/],['sno',/s\.?\s*no|sr\.?\s*no|serial|^#$/],['date',/date/],['floor',/floor|level/],['elev',/elevation|elev/],['area',/area|location|room|zone|unit/],['desc',/desc|snag|defect|issue|observation|remark/]];
+async function build(){
+  const buf=await idbGet('tpl');if(!buf)throw new Error('Upload your Excel template in Setup');
+  if(!photos.length)throw new Error('Add at least one photo');
+  const wb=new ExcelJS.Workbook();await wb.xlsx.load(buf);const ws=wb.worksheets[0];
+  let best={n:0,row:0,map:{}};
+  for(let r=1;r<=Math.min(ws.rowCount,40);r++){
+    const map={};ws.getRow(r).eachCell((c,ci)=>{const t=String(c.text||'').toLowerCase().trim();
+      for(const [k,re] of COLS)if(!map[k]&&re.test(t)){map[k]=ci;break}});
+    const n=Object.keys(map).length;if(n>best.n)best={n,row:r,map};
+  }
+  if(best.n<2||!best.map.image)throw new Error('Could not find header row with an Image/Photo column in the template');
+  const h=best.row,m=best.map,nc=Math.max(ws.columnCount,...Object.values(m));
+  const proto=ws.getRow(h+1),sty={};
+  for(let c=1;c<=nc;c++){const s=JSON.parse(JSON.stringify(proto.getCell(c).style||{}));
+    if(!s.border)s.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+    s.alignment={...(s.alignment||{}),wrapText:true,vertical:'middle',horizontal:'center'};sty[c]=s}
+  ws.getColumn(m.image).width=31;
+  const dm=d=>d?d.split('-').reverse().join('-'):'';
+  photos.forEach((p,i)=>{
+    const row=ws.getRow(h+1+i);
+    for(let c=1;c<=nc;c++){row.getCell(c).value=null;row.getCell(c).style=JSON.parse(JSON.stringify(sty[c]))}
+    if(m.sno)row.getCell(m.sno).value=i+1;
+    if(m.date)row.getCell(m.date).value=dm(p.date);
+    if(m.floor)row.getCell(m.floor).value=p.floor;
+    if(m.elev)row.getCell(m.elev).value=p.elev;
+    if(m.area)row.getCell(m.area).value=p.area;
+    if(m.desc){row.getCell(m.desc).value=p.desc;row.getCell(m.desc).alignment={...sty[m.desc].alignment,horizontal:'left'}}
+    row.height=118;row.commit&&row.commit();
+    const id=wb.addImage({base64:p.url,extension:'jpeg'}),k=Math.min(205/p.w,150/p.h);
+    ws.addImage(id,{tl:{col:m.image-1+.03,row:h+i+.03},ext:{width:p.w*k,height:p.h*k},editAs:'oneCell'});
+  });
+  return wb.xlsx.writeBuffer();
+}
+const b64=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
+const today=()=>iso(Date.now());
+async function generate(email){
+  busy(true);
+  try{
+    if(photos.some(p=>!p.desc.trim())&&cfg.key)await runAI();
+    st('Building Excel…');const buf=await build(),name=`Snag_List_${today()}.xlsx`;
+    if(email){
+      if(!cfg.url)throw new Error('Add Apps Script URL in Setup');
+      st('Emailing…');
+      const r=await fetch(cfg.url,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({token:cfg.sec,subject:`Snag List ${cfg.proj?'– '+cfg.proj+' ':''}– ${today()}`,filename:name,data:b64(buf)})});
+      const j=await r.json();if(!j.ok)throw new Error(j.error||'Email failed');
+      st('✅ Emailed to you!');
+    }else{
+      const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download=name;a.click();st('✅ Downloaded');
+    }
+  }catch(e){st('❌ '+e.message);console.error(e);busy(false);return}
+  busy(false);setTimeout(()=>st(''),5000);
+}
+$('#mail').onclick=()=>generate(true);
+$('#dl').onclick=()=>generate(false);
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
