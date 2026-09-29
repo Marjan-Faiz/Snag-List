@@ -39,7 +39,7 @@ details summary{font-weight:600;cursor:pointer}
 <div class="card">
 <details id="set"><summary>⚙️ Setup (one time)</summary>
 <label>Groq API key (free from console.groq.com/keys) — main AI</label><input id="groq" type="password" autocomplete="off">
-<label>Groq model (leave blank for default)</label><input id="gmodel" placeholder="meta-llama/llama-4-scout-17b-16e-instruct">
+<label>Groq model (leave blank for default)</label><input id="gmodel" placeholder="qwen/qwen3.8-27b">
 <label>Google Apps Script web-app URL (for email)</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
 <label>Secret code (same as in Code.gs)</label><input id="sec" type="password" autocomplete="off">
 <label>Project / site name (used in email subject)</label><input id="proj">
@@ -125,9 +125,17 @@ $('#clr').onclick=()=>{if(confirm('Remove all photos?')){photos=[];render()}};
 const PROMPT='You are a construction site quality inspector writing a snag list. Look at the photo and describe the defect in one or two short sentences: what the defect is, where on the element, and the rectification needed. Plain text only, no preamble.';
 const areaTxt=p=>PROMPT+(p.area?` Area: ${p.area}.`:'');
 async function callGroq(p){
-  const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.groq},body:JSON.stringify({model:cfg.gmodel||'meta-llama/llama-4-scout-17b-16e-instruct',max_tokens:200,messages:[{role:'user',content:[{type:'text',text:areaTxt(p)},{type:'image_url',image_url:{url:p.url}}]}]})});
-  const j=await r.json();if(!r.ok)throw new Error('Groq: '+(j.error?.message||r.status));
-  return j.choices[0].message.content.trim();
+  const models=[cfg.gmodel,'qwen/qwen3.8-27b','qwen/qwen3.6-27b'].filter(Boolean);
+  let err;
+  for(const model of models){
+    const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.groq},body:JSON.stringify({model,max_tokens:2000,messages:[{role:'user',content:[{type:'text',text:areaTxt(p)},{type:'image_url',image_url:{url:p.url}}]}]})});
+    const j=await r.json();
+    if(!r.ok){err=new Error('Groq ('+model+'): '+(j.error?.message||r.status));if(/does not exist|no access|decommission|not found/i.test(err.message))continue;throw err}
+    const t=(j.choices?.[0]?.message?.content||'').replace(/<think>[\s\S]*?<\/think>/g,'').trim();
+    if(!t)throw new Error('Groq: empty reply, retrying');
+    return t;
+  }
+  throw err;
 }
 async function describe(p){
   let err;
