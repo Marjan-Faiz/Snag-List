@@ -17,7 +17,7 @@ h1{font-size:1.3rem;margin:4px 0 12px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
 h2{font-size:1rem;margin:0 0 8px}
 label{display:block;font-size:.8rem;color:var(--mut);margin:6px 0 2px}
-input,textarea{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+input,textarea,select{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
 textarea{min-height:64px;resize:vertical}
 .g{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 button,.btn{display:block;width:100%;padding:12px;border:0;border-radius:10px;background:var(--pri);color:#fff;font:600 1rem system-ui;margin-top:8px;text-align:center}
@@ -42,6 +42,7 @@ details summary{font-weight:600;cursor:pointer}
 <label>Groq model (leave blank for default)</label><input id="gmodel" placeholder="qwen/qwen3.8-27b">
 <label>Google Apps Script web-app URL (for email)</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
 <label>Secret code (same as in Code.gs)</label><input id="sec" type="password" autocomplete="off">
+<label>My own snag phrases (one per line, shown in dropdown)</label><textarea id="custom" placeholder="Example:&#10;Grouting missing in bathroom"></textarea>
 <label>Project / site name (used in email subject)</label><input id="proj">
 <label>Excel template (.xlsx) — upload once</label><input id="tpl" type="file" accept=".xlsx">
 <small id="tplst"></small>
@@ -85,12 +86,12 @@ const st=m=>{const e=$('#st');e.style.display=m?'block':'none';e.textContent=m||
 const busy=b=>document.querySelectorAll('button').forEach(x=>x.disabled=b);
 
 /* ---------- settings ---------- */
-['groq','gmodel','url','sec','proj'].forEach(k=>$('#'+k).value=cfg[k]||'');
+['groq','gmodel','url','sec','proj','custom'].forEach(k=>$('#'+k).value=cfg[k]||'');
 async function tplStatus(){const t=await idbGet('tplName');$('#tplst').textContent=t?'✅ Template saved: '+t:'⚠️ No template uploaded yet';if(!t||!cfg.groq)$('#set').open=true}
 $('#to').value=cfg.to||'';
 tplStatus();
 $('#save').onclick=async()=>{
-  ['groq','gmodel','url','sec','proj'].forEach(k=>cfg[k]=$('#'+k).value.trim());
+  ['groq','gmodel','url','sec','proj','custom'].forEach(k=>cfg[k]=$('#'+k).value.trim());
   localStorage.snagCfg=JSON.stringify(cfg);
   const f=$('#tpl').files[0];
   if(f){await idbSet('tpl',await f.arrayBuffer());await idbSet('tplName',f.name)}
@@ -107,6 +108,17 @@ $('#files').onchange=async e=>{
     photos.push({...s,date:$('#dDate').value||iso(fs[i].lastModified),floor:$('#dFloor').value,elev:$('#dElev').value,area:$('#dArea').value,desc:''});}
   e.target.value='';busy(false);st('');render();
 };
+const SNAGS={
+'Wall / Plaster':['Crack in wall plaster - to be repaired and repainted','Plaster surface uneven - to be rectified','Hollow sound in plaster - to be removed and re-plastered','Honeycombing in concrete - to be repaired with polymer mortar','Gap in blockwork joint - to be filled'],
+'Painting':['Paint peeling - to be scraped and repainted','Uneven paint finish / patches - to be repainted','Paint splashes on surface - to be cleaned','Putty marks visible - to be sanded and repainted','Dampness stain on wall / ceiling - to be treated and repainted'],
+'Flooring / Tiles':['Tile cracked - to be replaced','Tile hollow - to be re-laid','Tile lippage / uneven level - to be corrected','Grout missing or uneven - to be regrouted','Skirting damaged or gap - to be rectified','Stain on flooring - to be cleaned'],
+'Doors / Windows':['Door misaligned - to be adjusted','Door lock / handle not working - to be repaired','Window glass scratched / damaged - to be replaced','Window sealant missing - to be applied','Gap between frame and wall - to be sealed'],
+'Plumbing':['Water leakage at pipe / joint - to be repaired','Water seepage in wall / ceiling - to be investigated and treated','Sanitary fixture loose - to be fixed','Floor drain not draining properly - to be corrected','Tap / shower not working - to be replaced'],
+'Electrical':['Switch / socket loose or damaged - to be fixed','Switch plate missing - to be installed','Light fitting not working - to be repaired','Exposed wiring - to be concealed and covered','DB cover missing - to be installed'],
+'Ceiling / Joinery / General':['Gypsum ceiling joint crack - to be filled and repainted','Ceiling grill / diffuser misaligned - to be fixed','Cabinet door misaligned - to be adjusted','Handrail loose - to be tightened','Waterproofing defect - to be redone','Fire safety item missing - to be installed','Debris and dust - to be cleaned']};
+const snagOpts=()=>{const mine=(cfg.custom||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  const g=mine.length?{'My snags':mine,...SNAGS}:SNAGS;
+  return Object.entries(g).map(([k,v])=>`<optgroup label="${k}">${v.map(x=>`<option value="${x}">${x}</option>`).join('')}</optgroup>`).join('')};
 function render(){
   $('#n').textContent=photos.length;
   $('#list').innerHTML=photos.length?photos.map((p,i)=>`<div class="ph"><img src="${p.url}"><div>
@@ -114,10 +126,12 @@ function render(){
   <div><label>Floor</label><input data-i="${i}" data-k="floor" value="${p.floor}"></div>
   <div><label>Elevation</label><input data-i="${i}" data-k="elev" value="${p.elev}"></div>
   <div><label>Area</label><input data-i="${i}" data-k="area" value="${p.area}"></div></div>
+  <label>Quick pick</label><select data-pick="${i}"><option value="">Choose common snag…</option>${snagOpts()}</select>
   <label>Snag description</label><textarea data-i="${i}" data-k="desc">${p.desc}</textarea>
   <button class="x" data-del="${i}">Remove</button></div></div>`).join(''):'<small>No photos yet.</small>';
 }
 $('#list').addEventListener('input',e=>{const t=e.target;if(t.dataset.k)photos[t.dataset.i][t.dataset.k]=t.value});
+$('#list').addEventListener('change',e=>{const i=e.target.dataset.pick;if(i!==undefined&&e.target.value){photos[i].desc=e.target.value;render()}});
 $('#list').addEventListener('click',e=>{if(e.target.dataset.del!==undefined){photos.splice(e.target.dataset.del,1);render()}});
 $('#clr').onclick=()=>{if(confirm('Remove all photos?')){photos=[];render()}};
 
@@ -194,7 +208,7 @@ const today=()=>iso(Date.now());
 async function generate(email){
   busy(true);
   try{
-    if(photos.some(p=>!p.desc.trim())&&cfg.groq)await runAI();
+    if(photos.some(p=>!p.desc.trim())&&!confirm('Some photos have no description. Continue anyway?')){busy(false);return}
     st('Building Excel…');const buf=await build(),name=`Snag_List_${today()}.xlsx`;
     if(email){
       if(!cfg.url)throw new Error('Add Apps Script URL in Setup');
