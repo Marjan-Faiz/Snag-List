@@ -73,7 +73,7 @@ details summary{font-weight:600;cursor:pointer}
 const $=s=>document.querySelector(s);
 const cfg=JSON.parse(localStorage.snagCfg||'{}');
 let photos=[];
-const MODEL='gemini-2.5-flash';
+const MODEL='gemini-3.8-flash';
 
 /* ---------- storage for template ---------- */
 const db=()=>new Promise(r=>{const q=indexedDB.open('snag',1);q.onupgradeneeded=()=>q.result.createObjectStore('k');q.onsuccess=()=>r(q.result)});
