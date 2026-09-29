@@ -38,7 +38,9 @@ details summary{font-weight:600;cursor:pointer}
 
 <div class="card">
 <details id="set"><summary>⚙️ Setup (one time)</summary>
-<label>Gemini API key (free from aistudio.google.com/apikey)</label><input id="key" type="password" autocomplete="off">
+<label>Groq API key (free from console.groq.com/keys) — main AI</label><input id="groq" type="password" autocomplete="off">
+<label>Groq model (leave blank for default)</label><input id="gmodel" placeholder="meta-llama/llama-4-scout-17b-16e-instruct">
+<label>Gemini API key (optional backup, aistudio.google.com/apikey)</label><input id="key" type="password" autocomplete="off">
 <label>Google Apps Script web-app URL (for email)</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
 <label>Secret code (same as in Code.gs)</label><input id="sec" type="password" autocomplete="off">
 <label>AI model name (change only if error says model unavailable)</label><input id="model" placeholder="gemini-3.8-flash">
@@ -62,6 +64,7 @@ details summary{font-weight:600;cursor:pointer}
 
 <div class="card"><h2>Photos (<span id="n">0</span>)</h2><div id="list"><small>No photos yet.</small></div></div>
 
+<div class="card"><label>Email the snag list to</label><input id="to" type="email" placeholder="name@example.com" autocomplete="email"></div>
 <button id="ai" class="s">✨ Write descriptions with AI</button>
 <button id="mail">📧 Generate &amp; email Excel</button>
 <button id="dl" class="s">⬇️ Generate &amp; download only</button>
@@ -85,11 +88,12 @@ const st=m=>{const e=$('#st');e.style.display=m?'block':'none';e.textContent=m||
 const busy=b=>document.querySelectorAll('button').forEach(x=>x.disabled=b);
 
 /* ---------- settings ---------- */
-['key','url','sec','proj','model'].forEach(k=>$('#'+k).value=cfg[k]||'');
+['key','groq','gmodel','model','url','sec','proj'].forEach(k=>$('#'+k).value=cfg[k]||'');
 async function tplStatus(){const t=await idbGet('tplName');$('#tplst').textContent=t?'✅ Template saved: '+t:'⚠️ No template uploaded yet';if(!t||!cfg.key)$('#set').open=true}
+$('#to').value=cfg.to||'';
 tplStatus();
 $('#save').onclick=async()=>{
-  ['key','url','sec','proj','model'].forEach(k=>cfg[k]=$('#'+k).value.trim());
+  ['key','groq','gmodel','model','url','sec','proj'].forEach(k=>cfg[k]=$('#'+k).value.trim());
   localStorage.snagCfg=JSON.stringify(cfg);
   const f=$('#tpl').files[0];
   if(f){await idbSet('tpl',await f.arrayBuffer());await idbSet('tplName',f.name)}
@@ -122,15 +126,29 @@ $('#clr').onclick=()=>{if(confirm('Remove all photos?')){photos=[];render()}};
 
 /* ---------- AI ---------- */
 const PROMPT='You are a construction site quality inspector writing a snag list. Look at the photo and describe the defect in one or two short sentences: what the defect is, where on the element, and the rectification needed. Plain text only, no preamble.';
-async function describe(p,tries=3){
-  const body={contents:[{parts:[{text:PROMPT+(p.area?` Area: ${p.area}.`:'')},{inline_data:{mime_type:'image/jpeg',data:p.url.split(',')[1]}}]}]};
+const areaTxt=p=>PROMPT+(p.area?` Area: ${p.area}.`:'');
+async function callGemini(p){
+  const body={contents:[{parts:[{text:areaTxt(p)},{inline_data:{mime_type:'image/jpeg',data:p.url.split(',')[1]}}]}]};
   const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent?key=${cfg.key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if((r.status===429||r.status===503)&&tries>1){st('AI busy, waiting 15s…');await new Promise(z=>setTimeout(z,15000));return describe(p,tries-1)}
-  const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');
+  const j=await r.json();if(!r.ok)throw new Error('Gemini: '+(j.error?.message||r.status));
   return j.candidates[0].content.parts.map(x=>x.text||'').join('').trim();
 }
+async function callGroq(p){
+  const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.groq},body:JSON.stringify({model:cfg.gmodel||'meta-llama/llama-4-scout-17b-16e-instruct',max_tokens:200,messages:[{role:'user',content:[{type:'text',text:areaTxt(p)},{type:'image_url',image_url:{url:p.url}}]}]})});
+  const j=await r.json();if(!r.ok)throw new Error('Groq: '+(j.error?.message||r.status));
+  return j.choices[0].message.content.trim();
+}
+async function describe(p){
+  const fns=[];if(cfg.groq)fns.push(callGroq);if(cfg.key)fns.push(callGemini);
+  let err;
+  for(let t=0;t<3;t++){
+    for(const f of fns){try{return await f(p)}catch(e){err=e}}
+    if(t<2){st('AI busy, retrying…');await new Promise(z=>setTimeout(z,8000))}
+  }
+  throw err;
+}
 async function runAI(){
-  if(!cfg.key)throw new Error('Add your Gemini API key in Setup');
+  if(!cfg.groq&&!cfg.key)throw new Error('Add your Groq (or Gemini) API key in Setup');
   const todo=photos.filter(p=>!p.desc.trim());
   for(let i=0;i<todo.length;i++){st(`AI describing ${i+1}/${todo.length}…`);
     try{todo[i].desc=await describe(todo[i])}catch(e){throw new Error('Photo '+(photos.indexOf(todo[i])+1)+': '+e.message)}
@@ -178,14 +196,15 @@ const today=()=>iso(Date.now());
 async function generate(email){
   busy(true);
   try{
-    if(photos.some(p=>!p.desc.trim())&&cfg.key)await runAI();
+    if(photos.some(p=>!p.desc.trim())&&(cfg.groq||cfg.key))await runAI();
     st('Building Excel…');const buf=await build(),name=`Snag_List_${today()}.xlsx`;
     if(email){
       if(!cfg.url)throw new Error('Add Apps Script URL in Setup');
+      const to=$('#to').value.trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to))throw new Error('Enter a valid email in "Email the snag list to"');cfg.to=to;localStorage.snagCfg=JSON.stringify(cfg);
       st('Emailing…');
-      const r=await fetch(cfg.url,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({token:cfg.sec,subject:`Snag List ${cfg.proj?'– '+cfg.proj+' ':''}– ${today()}`,filename:name,data:b64(buf)})});
+      const r=await fetch(cfg.url,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({token:cfg.sec,to:cfg.to,subject:`Snag List ${cfg.proj?'– '+cfg.proj+' ':''}– ${today()}`,filename:name,data:b64(buf)})});
       const j=await r.json();if(!j.ok)throw new Error(j.error||'Email failed');
-      st('✅ Emailed to you!');
+      st('✅ Emailed to '+cfg.to);
     }else{
       const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download=name;a.click();st('✅ Downloaded');
     }
