@@ -170,18 +170,20 @@ $('#ai').onclick=async()=>{busy(true);try{await runAI();st('Descriptions done �
 
 /* ---------- Excel ---------- */
 const COLS=[['image',/image|photo|pic/],['sno',/s\.?\s*no|sr\.?\s*no|serial|^#$/],['date',/date/],['floor',/floor|level/],['elev',/elevation|elev/],['area',/area|location|room|zone|unit/],['desc',/desc|snag|defect|issue|observation|remark/]];
-async function build(){
+let STAGE='';
+const cellTxt=c=>{try{const v=c.value;if(v==null)return '';if(typeof v==='object'){if(v.richText)return v.richText.map(x=>x.text||'').join('');if(v.result!=null)return String(v.result);if(v.text!=null)return String(v.text);return ''}return String(v)}catch(e){return ''}};
+async function build(){STAGE='reading template';
   const buf=await idbGet('tpl');if(!buf)throw new Error('Upload your Excel template in Setup');
   if(!photos.length)throw new Error('Add at least one photo');
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(buf);const ws=wb.worksheets[0];
-  let best={n:0,row:0,map:{}};
+  STAGE='finding headings';let best={n:0,row:0,map:{}};
   for(let r=1;r<=Math.min(ws.rowCount,40);r++){
-    const map={};ws.getRow(r).eachCell((c,ci)=>{const t=String(c.text||'').toLowerCase().trim();
+    const map={};ws.getRow(r).eachCell((c,ci)=>{const t=cellTxt(c).toLowerCase().trim();
       for(const [k,re] of COLS)if(!map[k]&&re.test(t)){map[k]=ci;break}});
     const n=Object.keys(map).length;if(n>best.n)best={n,row:r,map};
   }
   if(best.n<2||!best.map.image)throw new Error('Could not find header row with an Image/Photo column in the template');
-  const h=best.row,m=best.map,nc=Math.max(ws.columnCount,...Object.values(m));
+  STAGE='formatting';const h=best.row,m=best.map,nc=Math.max(ws.columnCount,...Object.values(m));
   const proto=ws.getRow(h+1),sty={};
   for(let c=1;c<=nc;c++){const s=JSON.parse(JSON.stringify(proto.getCell(c).style||{}));
     if(!s.border)s.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
@@ -189,6 +191,7 @@ async function build(){
   ws.getColumn(m.image).width=31;
   const dm=d=>d?d.split('-').reverse().join('-'):'';
   photos.forEach((p,i)=>{
+    STAGE='filling row '+(i+1);
     const row=ws.getRow(h+1+i);
     for(let c=1;c<=nc;c++){row.getCell(c).value=null;row.getCell(c).style=JSON.parse(JSON.stringify(sty[c]))}
     if(m.sno)row.getCell(m.sno).value=i+1;
@@ -201,12 +204,12 @@ async function build(){
     const id=wb.addImage({base64:p.url,extension:'jpeg'}),k=Math.min(205/p.w,150/p.h);
     ws.addImage(id,{tl:{col:m.image-1+.03,row:h+i+.03},ext:{width:p.w*k,height:p.h*k},editAs:'oneCell'});
   });
-  return wb.xlsx.writeBuffer();
+  STAGE='saving file';return wb.xlsx.writeBuffer();
 }
 const b64=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
 const today=()=>iso(Date.now());
 async function generate(email){
-  busy(true);
+  busy(true);STAGE='';
   try{
     if(photos.some(p=>!p.desc.trim())&&!confirm('Some photos have no description. Continue anyway?')){busy(false);return}
     st('Building Excel…');const buf=await build(),name=`Snag_List_${today()}.xlsx`;
@@ -220,7 +223,7 @@ async function generate(email){
     }else{
       const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download=name;a.click();st('✅ Downloaded');
     }
-  }catch(e){st('❌ '+e.message);console.error(e);busy(false);return}
+  }catch(e){st('❌ '+e.message+(STAGE?'  [step: '+STAGE+']':''));console.error(e);busy(false);return}
   busy(false);setTimeout(()=>st(''),5000);
 }
 $('#mail').onclick=()=>generate(true);
